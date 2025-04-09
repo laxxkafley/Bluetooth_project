@@ -9,6 +9,9 @@
 
 #include "dummy_partition.h"
 
+
+
+
 int main(void)
 {
 	uint8_t digest[32];

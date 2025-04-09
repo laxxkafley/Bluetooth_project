@@ -20,6 +20,14 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
 
+
+//jasmine
+
+// Include the header for secure partition (TF-M)
+// #include "tfm_api.h"
+
+//jasmine
+
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 };
@@ -157,6 +165,7 @@ int main(void)
 
 	bt_conn_auth_cb_register(&auth_cb_display);
 	bt_conn_auth_info_cb_register(&auth_cb_info);
+
 
 	start_adv();
 
