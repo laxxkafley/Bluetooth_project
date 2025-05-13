@@ -6154,7 +6154,9 @@ int bt_smp_init(void)
 
 	LOG_DBG("LE SC %s", sc_supported ? "enabled" : "disabled");
 
+	LOG_INF("JASMIN: BT_SMPINIT");
 	if (!IS_ENABLED(CONFIG_BT_SMP_OOB_LEGACY_PAIR_ONLY)) {
+		LOG_INF("JASMIN: Calling bt_pub_key_gen");
 		bt_pub_key_gen(&pub_key_gen.cb);
 	}
 
