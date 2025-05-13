@@ -8,7 +8,7 @@ target_sources(app PRIVATE
   src/main.c
 )
 
-zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)
+
 
 #
 # Copyright (c) 2021 Nordic Semiconductor ASA
@@ -16,57 +16,42 @@ zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)
 # SPDX-License-Identifier: Apache-2.0
 #
 
-add_library(tfm_app_rot_partition_dp STATIC)
+cmake_minimum_required(VERSION 3.20.0)
 
-target_include_directories(tfm_app_rot_partition_dp
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    PRIVATE
-        ${CMAKE_BINARY_DIR}/dummy_partition
-)
-target_include_directories(tfm_partitions
-    INTERFACE
-        ${CMAKE_BINARY_DIR}/dummy_partition
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+
+get_target_property(TFM_BINARY_DIR tfm TFM_BINARY_DIR)
+configure_file(
+  ${CMAKE_CURRENT_LIST_DIR}/dummy_partition/tfm_manifest_list.yaml.in
+  ${CMAKE_CURRENT_BINARY_DIR}/dummy_partition/tfm_manifest_list.yaml
 )
 
-target_sources(tfm_app_rot_partition_dp
-    PRIVATE
-        dummy_partition.c
+set_property(TARGET zephyr_property_target
+  APPEND PROPERTY TFM_CMAKE_OPTIONS
+  -DTFM_EXTRA_MANIFEST_LIST_FILES=${CMAKE_CURRENT_BINARY_DIR}/dummy_partition/tfm_manifest_list.yaml
+  -DTFM_EXTRA_PARTITION_PATHS=${CMAKE_CURRENT_LIST_DIR}/dummy_partition
 )
 
-# The generated sources
-target_sources(tfm_app_rot_partition_dp
-    PRIVATE
-        ${CMAKE_BINARY_DIR}/dummy_partition/auto_generated/intermedia_tfm_dummy_partition.c
-)
-target_sources(tfm_partitions
-    INTERFACE
-        ${CMAKE_BINARY_DIR}/dummy_partition/auto_generated/load_info_tfm_dummy_partition.c
+project(tfm_secure_partition)
+
+target_sources(app PRIVATE
+  src/main.c
+  src/dummy_partition.c
 )
 
-target_link_libraries(tfm_app_rot_partition_dp
-    PRIVATE
-        platform_s
-        tfm_sprt
-        psa_crypto_config
+target_include_directories(app PRIVATE
+  $<TARGET_PROPERTY:tfm,TFM_BINARY_DIR>/api_ns/interface/include
 )
 
-target_link_libraries(tfm_spm
-    PRIVATE
-        tfm_app_rot_partition_dp
+target_compile_definitions(app
+    PRIVATE TFM_PARTITION_DUMMY_PARTITION
 )
+
+
 
 ############################ Partition Defs ####################################
 
-target_link_libraries(tfm_partitions
-    INTERFACE
-        tfm_app_rot_partition_dp
-)
 
-target_compile_definitions(tfm_config
-    INTERFACE
-        TFM_PARTITION_DUMMY_PARTITION
-)
 
 
 
