@@ -19,17 +19,17 @@ target_include_directories(tfm_partitions
 
 target_sources(tfm_app_rot_partition_dp
     PRIVATE
-        dummy_partition.c
+            BLE_partition.c # dummy
 )
 
 # The generated sources
 target_sources(tfm_app_rot_partition_dp
     PRIVATE
-        ${CMAKE_BINARY_DIR}/dummy_partition/auto_generated/intermedia_tfm_dummy_partition.c
+        ${CMAKE_BINARY_DIR}/dummy_partition/auto_generated/intermedia_tfm_dummy_partition.c #DUMMY
 )
 target_sources(tfm_partitions
     INTERFACE
-        ${CMAKE_BINARY_DIR}/dummy_partition/auto_generated/load_info_tfm_dummy_partition.c
+        ${CMAKE_BINARY_DIR}/dummy_partition/auto_generated/load_info_tfm_dummy_partition.c #DUMMY
 )
 
 target_link_libraries(tfm_app_rot_partition_dp

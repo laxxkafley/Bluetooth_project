@@ -1,10 +1,4 @@
-/* main.c - Application main entry point */
 
-/*
- * Copyright (c) 2015-2016 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- */
 
 #include <zephyr/types.h>
 #include <stddef.h>
@@ -23,7 +17,10 @@
 #include <psa/crypto.h>
 
 
-#include "dummy_partition.h"
+#include "BLE_partition.h"
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(main);
+
 
 
 
@@ -194,5 +191,19 @@ int main(void)
 			printk("\n");
 		}
 	}
+
+	LOG_INF("yoooooooo");
+	k_sleep(K_MSEC(100)); // small delay to let UART flush
+	/////////////////////jasmineeeeeeeeeeeee-add-this-for-HI I AM JASMINE I LIKE PIZZA
+	char hi_msg[64] = {0};
+if (dp_jas_hi(hi_msg, sizeof(hi_msg)) == PSA_SUCCESS) // Call the dp_jas_hi wrapper (IPC to the secure partition) and check if it succeeds
+{
+	LOG_INF("Secure says: %s", hi_msg);
+
+} else {
+    LOG_INF("Secure call to Jasmine failed!\n");
+}
+	/////////////////////////////until here
 	return 0;
+	
 }
