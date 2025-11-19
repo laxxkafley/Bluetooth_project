@@ -12,6 +12,7 @@
 #include "psa/client.h"
 #include "psa_manifest/sid.h"
 
+
 psa_status_t dp_secret_digest(uint32_t secret_index,
 			void *p_digest,
 			size_t digest_size)

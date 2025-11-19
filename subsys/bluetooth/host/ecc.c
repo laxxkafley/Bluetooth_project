@@ -1454,6 +1454,7 @@ static sys_slist_t pub_key_cb_slist;
 static bt_dh_key_cb_t dh_key_cb;
 static psa_key_id_t global_key_id; // handle for secure private key
 static uint8_t dh_key_cb_remote_key[BT_PUB_KEY_LEN]; // store remote public key for ECDH
+static psa_key_id_t current_private_key_id = 0; // 0 = not initialized
 
 static void generate_pub_key(struct k_work *work);
 static void generate_dh_key(struct k_work *work);
@@ -1523,47 +1524,91 @@ bool bt_pub_key_is_valid(const uint8_t key[BT_PUB_KEY_LEN])
     return false;
 }
 
+//adding more than onr private key
+// void bt_use_secure_pub_key(void)
+// {
+//     uint8_t buf[sizeof(psa_key_id_t) + TFN_PUBKEY_EXPORT_LEN];
+//     size_t pubkey_len = 0;
+//     psa_status_t status;
+
+//     LOG_INF("=== SECURE KEY GENERATION STARTING ===");
+//     LOG_INF("Requesting key from SECURE PARTITION (TrustZone)...");
+
+//     status = dp_ble_keygen(buf, sizeof(buf), &pubkey_len);
+//     if (status != PSA_SUCCESS) {
+//         LOG_ERR("Failed to get Secure Public Key from Partition: %d", status);
+//         return;
+//     }
+
+//     LOG_INF("*** SECURE KEY SUCCESSFULLY GENERATED IN TRUSTZONE ***");
+
+//     if (pubkey_len != TFN_PUBKEY_EXPORT_LEN) {
+//         LOG_ERR("Secure public key length unexpected: %zu", pubkey_len);
+//         return;
+//     }
+
+//     psa_key_id_t returned_key_id;
+//     memcpy(&returned_key_id, buf, sizeof(returned_key_id));
+//     global_key_id = returned_key_id;
+
+//     uint8_t *pubkey_ptr = &buf[sizeof(returned_key_id)];
+
+//     memcpy(ecc.public_key_be, pubkey_ptr + 1, BT_PUB_KEY_LEN);   // exact X||Y in big-endian
+
+//     // Convert public key from big-endian to little-endian for Bluetooth
+//     sys_memcpy_swap(pub_key, ecc.public_key_be, BT_PUB_KEY_COORD_LEN);
+//     sys_memcpy_swap(&pub_key[BT_PUB_KEY_COORD_LEN],
+//             &ecc.public_key_be[BT_PUB_KEY_COORD_LEN], BT_PUB_KEY_COORD_LEN);
+
+//     atomic_set_bit(bt_dev.flags, BT_DEV_HAS_PUB_KEY);
+
+//     LOG_INF("Got BLE secure public key (len=%zu), key_id=%u", pubkey_len, (unsigned)returned_key_id);
+//     LOG_HEXDUMP_INF(ecc.public_key_be, BT_PUB_KEY_LEN, "Secure Key (Big-Endian from partition)");
+//     LOG_HEXDUMP_INF(pub_key, BT_PUB_KEY_LEN, "Secure Key (Little-Endian for Bluetooth)");
+// }
+//adding more than onr private key
 void bt_use_secure_pub_key(void)
-{
-    uint8_t buf[sizeof(psa_key_id_t) + TFN_PUBKEY_EXPORT_LEN];
-    size_t pubkey_len = 0;
-    psa_status_t status;
+  {
+      psa_key_id_t private_key_id;
+      uint8_t pubkey_data[TFN_PUBKEY_EXPORT_LEN];
+      size_t pubkey_len = 0;
+      psa_status_t status;
 
-    LOG_INF("=== SECURE KEY GENERATION STARTING ===");
-    LOG_INF("Requesting key from SECURE PARTITION (TrustZone)...");
+      LOG_INF("=== SECURE KEY GENERATION STARTING ===");
+      LOG_INF("Requesting key from SECURE PARTITION (TrustZone)...");
 
-    status = dp_ble_keygen(buf, sizeof(buf), &pubkey_len);
-    if (status != PSA_SUCCESS) {
-        LOG_ERR("Failed to get Secure Public Key from Partition: %d", status);
-        return;
-    }
+      status = dp_ble_keygen(&private_key_id, pubkey_data, &pubkey_len);
+      if (status != PSA_SUCCESS) {
+          LOG_ERR("Failed to get Secure Public Key: %d", status);
+          return;
+      }
 
-    LOG_INF("*** SECURE KEY SUCCESSFULLY GENERATED IN TRUSTZONE ***");
+      // Store private key ID for later ECDH use
+      current_private_key_id = private_key_id;
 
-    if (pubkey_len != TFN_PUBKEY_EXPORT_LEN) {
-        LOG_ERR("Secure public key length unexpected: %zu", pubkey_len);
-        return;
-    }
+      LOG_INF("*** KEY GENERATED (ID=0x%08x) IN TRUSTZONE ***", private_key_id);
 
-    psa_key_id_t returned_key_id;
-    memcpy(&returned_key_id, buf, sizeof(returned_key_id));
-    global_key_id = returned_key_id;
+      if (pubkey_len != TFN_PUBKEY_EXPORT_LEN) {
+          LOG_ERR("Secure public key length unexpected: %zu", pubkey_len);
+          return;
+      }
 
-    uint8_t *pubkey_ptr = &buf[sizeof(returned_key_id)];
+      // Skip 0x04 prefix, copy X||Y (64 bytes)
+      memcpy(ecc.public_key_be, pubkey_data + 1, BT_PUB_KEY_LEN);
 
-    memcpy(ecc.public_key_be, pubkey_ptr + 1, BT_PUB_KEY_LEN);   // exact X||Y in big-endian
+      // Convert to little-endian for Bluetooth
+      sys_memcpy_swap(pub_key, ecc.public_key_be, BT_PUB_KEY_COORD_LEN);
+      sys_memcpy_swap(&pub_key[BT_PUB_KEY_COORD_LEN],
+              &ecc.public_key_be[BT_PUB_KEY_COORD_LEN],
+  BT_PUB_KEY_COORD_LEN);
 
-    // Convert public key from big-endian to little-endian for Bluetooth
-    sys_memcpy_swap(pub_key, ecc.public_key_be, BT_PUB_KEY_COORD_LEN);
-    sys_memcpy_swap(&pub_key[BT_PUB_KEY_COORD_LEN],
-            &ecc.public_key_be[BT_PUB_KEY_COORD_LEN], BT_PUB_KEY_COORD_LEN);
+      atomic_set_bit(bt_dev.flags, BT_DEV_HAS_PUB_KEY);
 
-    atomic_set_bit(bt_dev.flags, BT_DEV_HAS_PUB_KEY);
-
-    LOG_INF("Got BLE secure public key (len=%zu), key_id=%u", pubkey_len, (unsigned)returned_key_id);
-    LOG_HEXDUMP_INF(ecc.public_key_be, BT_PUB_KEY_LEN, "Secure Key (Big-Endian from partition)");
-    LOG_HEXDUMP_INF(pub_key, BT_PUB_KEY_LEN, "Secure Key (Little-Endian for Bluetooth)");
-}
+      LOG_INF("Got BLE secure public key (ID=0x%08x)", private_key_id);
+      LOG_HEXDUMP_INF(ecc.public_key_be, BT_PUB_KEY_LEN, "Secure Key (Big-Endian)");
+      LOG_HEXDUMP_INF(pub_key, BT_PUB_KEY_LEN, "Secure Key (Little-Endian for BT)");
+  }
+//until here  for adding more than one private key
 
 static void generate_pub_key(struct k_work *work)
 {
@@ -1586,44 +1631,119 @@ static void generate_pub_key(struct k_work *work)
     k_sched_unlock();
 }
 
+//adding more than one private key
+// static void generate_dh_key(struct k_work *work)
+// {
+//     int err = 0;
+//     uint8_t dhkey[TFN_ECDH_SHARED_KEY_LEN];
+
+//     uint8_t tmp_pub_key_buf[TFN_PUBKEY_EXPORT_LEN];
+//     tmp_pub_key_buf[0] = 0x04; // uncompressed
+//     memcpy(&tmp_pub_key_buf[1], dh_key_cb_remote_key, BT_PUB_KEY_LEN); // X||Y directly
+
+//     // LOG_HEXDUMP_INF(ecc.public_key_be, BT_PUB_KEY_LEN, "Local Secure Public Key (X||Y)");
+//     // LOG_HEXDUMP_INF(tmp_pub_key_buf + 1, BT_PUB_KEY_LEN, "Remote Public Key (X||Y)");
+
+//     psa_status_t status = dp_ble_ecdh(tmp_pub_key_buf, dhkey, sizeof(dhkey));
+
+//     if (status != PSA_SUCCESS) {
+//         err = -EIO;
+//         LOG_ERR("Secure ECDH failed: %d", status);
+//     } else {
+//         LOG_HEXDUMP_INF(dhkey, TFN_ECDH_SHARED_KEY_LEN, "DH Key");
+//     }
+
+//     k_sched_lock();
+//     if (dh_key_cb) {
+//         bt_dh_key_cb_t cb = dh_key_cb;
+//         dh_key_cb = NULL;
+//         atomic_clear_bit(flags, PENDING_DHKEY);
+
+//         if (err) {
+//             cb(NULL);
+//         } else {
+//             // Convert DH key from big-endian to little-endian for Bluetooth stack
+//             uint8_t dhkey_le[TFN_ECDH_SHARED_KEY_LEN];
+//             sys_memcpy_swap(dhkey_le, dhkey, TFN_ECDH_SHARED_KEY_LEN);
+//             cb(dhkey_le);
+//         }
+//     }
+//     k_sched_unlock();
+// }
+//adding more than one private key
+
+
 static void generate_dh_key(struct k_work *work)
-{
-    int err = 0;
-    uint8_t dhkey[TFN_ECDH_SHARED_KEY_LEN];
+  {
+      int err = 0;
+      uint8_t dhkey[TFN_ECDH_SHARED_KEY_LEN];
+      uint8_t tmp_pub_key_buf[TFN_PUBKEY_EXPORT_LEN];
 
-    uint8_t tmp_pub_key_buf[TFN_PUBKEY_EXPORT_LEN];
-    tmp_pub_key_buf[0] = 0x04; // uncompressed
-    memcpy(&tmp_pub_key_buf[1], dh_key_cb_remote_key, BT_PUB_KEY_LEN); // X||Y directly
+      // Validate private key ID
+      if (current_private_key_id == 0) {
+          LOG_ERR("No valid private key ID!");
+          err = -EIO;
+          goto exit;
+      }
 
-    // LOG_HEXDUMP_INF(ecc.public_key_be, BT_PUB_KEY_LEN, "Local Secure Public Key (X||Y)");
-    // LOG_HEXDUMP_INF(tmp_pub_key_buf + 1, BT_PUB_KEY_LEN, "Remote Public Key (X||Y)");
+      tmp_pub_key_buf[0] = 0x04; // uncompressed
+      memcpy(&tmp_pub_key_buf[1], dh_key_cb_remote_key, BT_PUB_KEY_LEN);
 
-    psa_status_t status = dp_ble_ecdh(tmp_pub_key_buf, dhkey, sizeof(dhkey));
+      LOG_INF("Using private key ID 0x%08x for ECDH", current_private_key_id);
 
-    if (status != PSA_SUCCESS) {
-        err = -EIO;
-        LOG_ERR("Secure ECDH failed: %d", status);
-    } else {
-        LOG_HEXDUMP_INF(dhkey, TFN_ECDH_SHARED_KEY_LEN, "DH Key");
-    }
+      // Pass private key ID to ECDH service
+      // Call secure partition to compute DH key
 
-    k_sched_lock();
-    if (dh_key_cb) {
-        bt_dh_key_cb_t cb = dh_key_cb;
-        dh_key_cb = NULL;
-        atomic_clear_bit(flags, PENDING_DHKEY);
+      psa_status_t status = dp_ble_ecdh(current_private_key_id,
+                                        tmp_pub_key_buf,
+                                        dhkey, sizeof(dhkey));
 
-        if (err) {
-            cb(NULL);
-        } else {
-            // Convert DH key from big-endian to little-endian for Bluetooth stack
-            uint8_t dhkey_le[TFN_ECDH_SHARED_KEY_LEN];
-            sys_memcpy_swap(dhkey_le, dhkey, TFN_ECDH_SHARED_KEY_LEN);
-            cb(dhkey_le);
-        }
-    }
-    k_sched_unlock();
-}
+      if (status != PSA_SUCCESS) {
+          err = -EIO;
+          LOG_ERR("[ECC] Secure ECDH failed: %d", status);
+      } else {
+          // Extract DH Key ID from handle
+          uint32_t dh_key_id;
+          memcpy(&dh_key_id, dhkey, sizeof(uint32_t));
+          LOG_INF("========================================");
+          LOG_INF("[ECC] ✓ Received 32-byte handle from secure partition");
+          LOG_INF("[ECC] First 4 bytes: %02x %02x %02x %02x",
+                  dhkey[0], dhkey[1], dhkey[2], dhkey[3]);
+          LOG_INF("[ECC] Extracted DH Key ID = %u (0x%08x)", dh_key_id, dh_key_id);
+          LOG_INF("========================================");
+      }
+
+  exit:
+      k_sched_lock();
+      if (dh_key_cb) {
+          bt_dh_key_cb_t cb = dh_key_cb;
+          dh_key_cb = NULL;
+          atomic_clear_bit(flags, PENDING_DHKEY);
+
+          if (err) {
+              cb(NULL);
+          } else {
+              // Extract and print DH Key ID before passing to SMP
+              uint32_t dh_key_id_before_cb;
+              memcpy(&dh_key_id_before_cb, dhkey, sizeof(uint32_t));
+              LOG_INF("[ECC] Passing handle to SMP callback...");
+              LOG_INF("[ECC] Handle first 4 bytes: %02x %02x %02x %02x",
+                      dhkey[0], dhkey[1], dhkey[2], dhkey[3]);
+              LOG_INF("[ECC] DH Key ID = %u (0x%08x)",
+                      dh_key_id_before_cb, dh_key_id_before_cb);
+
+              // Pass DH key handle directly to SMP (no swap)
+              cb(dhkey);
+
+              LOG_INF("[ECC] ✓ Handle passed to SMP");
+          }
+
+      }
+      k_sched_unlock();
+  }
+
+
+//until here for adding more than one private keyy
 
 int bt_pub_key_gen(struct bt_pub_key_cb *new_cb)
 {

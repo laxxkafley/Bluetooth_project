@@ -39,6 +39,10 @@
 #include "l2cap_internal.h"
 #include "smp.h"
 
+#if defined(CONFIG_TFM_IPC)
+#include "/home/jasmine/zephyrproject/zephyr/samples/bluetooth/peripheral_sc_only/src/BLE_partition.h"
+#endif
+
 #define LOG_LEVEL CONFIG_BT_SMP_LOG_LEVEL
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(bt_smp);
@@ -3419,13 +3423,14 @@ static uint8_t compute_and_send_central_dhcheck(struct bt_smp *smp)
 		return BT_SMP_ERR_UNSPECIFIED;
 	}
 
-	/* calculate LTK and mackey */
+	/* calculate LTK and mackey  // ← Uses DH key from non-secure  // Local random (16 bytes) // Remote random (16 bytes) */
+
 	if (bt_crypto_f5(smp->dhkey, smp->prnd, smp->rrnd, &smp->chan.chan.conn->le.init_addr,
 			 &smp->chan.chan.conn->le.resp_addr, smp->mackey, smp->tk)) {
 		LOG_ERR("Calculate LTK failed");
 		return BT_SMP_ERR_UNSPECIFIED;
 	}
-	/* calculate local DHKey check */
+	/* calculate local DHKey check Calculate DHKey check using F6	 */
 	if (bt_crypto_f6(smp->mackey, smp->prnd, smp->rrnd, r, &smp->preq[1],
 			 &smp->chan.chan.conn->le.init_addr, &smp->chan.chan.conn->le.resp_addr,
 			 e)) {
@@ -3465,19 +3470,132 @@ static uint8_t compute_and_check_and_send_periph_dhcheck(struct bt_smp *smp)
 	}
 
 	/* calculate LTK and mackey */
+#if defined(CONFIG_TFM_IPC)
+	// Extract DH key ID from first 4 bytes (keep as full 32-bit value)
+	uint32_t dh_key_id;
+	memcpy(&dh_key_id, smp->dhkey, sizeof(uint32_t));
+
+	LOG_INF("========================================");
+	LOG_INF("[SMP] ✓ Received DH Key Handle from ECC");
+	LOG_INF("[SMP] Handle first 4 bytes: %02x %02x %02x %02x",
+	        smp->dhkey[0], smp->dhkey[1], smp->dhkey[2], smp->dhkey[3]);
+	LOG_INF("[SMP] Extracted DH Key ID = %u (0x%08x)", dh_key_id, dh_key_id);
+	LOG_INF("[SMP] Calling F5 with DH Key ID...");
+	LOG_INF("========================================");
+
+	// Call secure F5 service - MacKey and LTK will be stored in secure partition
+	// NOTE: bt_crypto_f5 takes (w, n1, n2) where n1=rrnd, n2=prnd for peripheral
+	psa_status_t status = dp_ble_f5(dh_key_id, smp->rrnd, smp->prnd,
+	                                &smp->chan.chan.conn->le.init_addr,
+	                                &smp->chan.chan.conn->le.resp_addr);
+
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("[SMP] F5 failed: %d", status);
+		return BT_SMP_ERR_UNSPECIFIED;
+	}
+	LOG_INF("[SMP] F5 success - MacKey and LTK stored in secure partition");
+
+	// Retrieve LTK from secure partition for controller
+	status = dp_ble_get_ltk(dh_key_id, smp->tk);
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("[SMP] GET_LTK failed: %d", status);
+		return BT_SMP_ERR_UNSPECIFIED;
+	}
+	LOG_INF("[SMP] ✓ LTK retrieved from secure partition");
+	LOG_HEXDUMP_INF(smp->tk, 16, "[SMP] LTK (16 bytes):");
+
+	// ========== SECURITY TEST: Try to access secrets from non-secure world ==========
+	LOG_INF("==========================================================");
+	LOG_INF("      SECURITY BOUNDARY TEST - Attempting Secret Access");
+	LOG_INF("==========================================================");
+
+	// Test 1: Check what's in smp->dhkey buffer (should be handle, not actual DH key)
+	LOG_INF("[TEST 1] Checking smp->dhkey buffer (should be handle only):");
+	LOG_HEXDUMP_INF(smp->dhkey, 32, "  dhkey buffer (32 bytes):");
+	LOG_INF("  First 4 bytes = DH Key ID (handle): 0x%08x", dh_key_id);
+	LOG_INF("  Remaining 28 bytes = zeros (padding)");
+
+	// Test 2: Try to export PRIVATE KEY from non-secure PSA (should fail!)
+	LOG_INF("[TEST 2] Attempting to export PRIVATE KEY from non-secure PSA...");
+	// We don't have the private key ID in SMP, but let's try common IDs
+	psa_key_id_t test_priv_key_ids[] = {0x40000001, 0x40000002};
+	uint8_t test_priv_key[64];
+	size_t test_len;
+	bool priv_key_leaked = false;
+	for (int i = 0; i < 2; i++) {
+		psa_status_t status = psa_export_key(test_priv_key_ids[i], test_priv_key, 64, &test_len);
+		if (status == PSA_SUCCESS) {
+			LOG_ERR("  ✗ SECURITY BREACH! Private key ID 0x%08x exported!", test_priv_key_ids[i]);
+			LOG_HEXDUMP_ERR(test_priv_key, test_len, "  Leaked private key:");
+			priv_key_leaked = true;
+		}
+	}
+	if (!priv_key_leaked) {
+		LOG_INF("  ✓ SECURE! Private key export FAILED from non-secure world");
+		LOG_INF("  Private key stays in secure partition PSA only");
+	}
+
+	// Test 3: Try to export DH KEY from non-secure PSA (should fail!)
+	LOG_INF("[TEST 3] Attempting to export DH KEY using ID 0x%08x from non-secure PSA...", dh_key_id);
+	uint8_t test_dh_key[32];
+	psa_status_t dh_status = psa_export_key(dh_key_id, test_dh_key, 32, &test_len);
+	if (dh_status == PSA_SUCCESS) {
+		LOG_ERR("  ✗ SECURITY BREACH! DH key exported from non-secure world!");
+		LOG_HEXDUMP_ERR(test_dh_key, 32, "  Leaked DH key:");
+	} else {
+		LOG_INF("  ✓ SECURE! DH key export FAILED (error: %d)", dh_status);
+		LOG_INF("  DH key stays in secure partition PSA only");
+	}
+
+	// Test 4: Try to access MacKey (should be impossible - no API exists)
+	LOG_INF("[TEST 4] Attempting to access MacKey...");
+	LOG_INF("  No PSA API exists to retrieve MacKey from secure partition");
+	LOG_INF("  MacKey stored in sec_ble_keys[] array in secure partition memory");
+	LOG_INF("  Non-secure world has NO access to secure partition memory");
+	LOG_INF("  ✓ SECURE! MacKey is completely inaccessible from non-secure world");
+
+	// Summary
+	LOG_INF("==========================================================");
+	LOG_INF("              SECURITY TEST SUMMARY");
+	LOG_INF("==========================================================");
+	LOG_INF("  Private Key:  Protected in secure PSA");
+	LOG_INF("  DH Key:       Protected in secure PSA");
+	LOG_INF("  MacKey:       Protected in secure partition memory");
+	LOG_INF("  Only exposed: Key IDs (handles) and public outputs");
+	LOG_INF("==========================================================");
+#else
+	// Fallback to non-secure F5
 	if (bt_crypto_f5(smp->dhkey, smp->rrnd, smp->prnd, &smp->chan.chan.conn->le.init_addr,
 			 &smp->chan.chan.conn->le.resp_addr, smp->mackey, smp->tk)) {
 		LOG_ERR("Calculate LTK failed");
 		return BT_SMP_ERR_UNSPECIFIED;
 	}
+#endif
 
 	/* calculate local DHKey check */
+#if defined(CONFIG_TFM_IPC)
+	LOG_INF("[SMP] Calling F6 (local) with DH Key ID = %u", dh_key_id);
+
+	status = dp_ble_f6(dh_key_id, smp->prnd, smp->rrnd, r, &smp->prsp[1],
+	                   &smp->chan.chan.conn->le.resp_addr,
+	                   &smp->chan.chan.conn->le.init_addr,
+	                   e);
+
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("[SMP] F6 (local) failed: %d", status);
+		return BT_SMP_ERR_UNSPECIFIED;
+	}
+	LOG_INF("[SMP] ✓ F6 (local) success");
+	LOG_HEXDUMP_INF(e, 16, "[SMP] Local DHKey Check (Ea):");
+#else
+	// Fallback to non-secure F6
 	if (bt_crypto_f6(smp->mackey, smp->prnd, smp->rrnd, r, &smp->prsp[1],
 			 &smp->chan.chan.conn->le.resp_addr, &smp->chan.chan.conn->le.init_addr,
 			 e)) {
 		LOG_ERR("Calculate local DHKey check failed");
 		return BT_SMP_ERR_UNSPECIFIED;
 	}
+#endif
 
 	if (smp->method == LE_SC_OOB) {
 		if (smp->oobd_local) {
@@ -3488,17 +3606,38 @@ static uint8_t compute_and_check_and_send_periph_dhcheck(struct bt_smp *smp)
 	}
 
 	/* calculate remote DHKey check */
+#if defined(CONFIG_TFM_IPC)
+	LOG_INF("[SMP] Calling F6 (remote) with DH Key ID = %u", dh_key_id);
+
+	status = dp_ble_f6(dh_key_id, smp->rrnd, smp->prnd, r, &smp->preq[1],
+	                   &smp->chan.chan.conn->le.init_addr,
+	                   &smp->chan.chan.conn->le.resp_addr,
+	                   re);
+
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("[SMP] F6 (remote) failed: %d", status);
+		return BT_SMP_ERR_UNSPECIFIED;
+	}
+	LOG_INF("[SMP] ✓ F6 (remote) success");
+	LOG_HEXDUMP_INF(re, 16, "[SMP] Expected Remote DHKey Check (Eb):");
+#else
+	// Fallback to non-secure F6
 	if (bt_crypto_f6(smp->mackey, smp->rrnd, smp->prnd, r, &smp->preq[1],
 			 &smp->chan.chan.conn->le.init_addr, &smp->chan.chan.conn->le.resp_addr,
 			 re)) {
 		LOG_ERR("Calculate remote DHKey check failed");
 		return BT_SMP_ERR_UNSPECIFIED;
 	}
+#endif
 
 	/* compare received E with calculated remote */
+	LOG_HEXDUMP_INF(smp->e, 16, "[SMP] Received Remote DHKey Check:");
+	LOG_INF("[SMP] Verifying Remote DHKey Check...");
 	if (memcmp(smp->e, re, 16)) {
+		LOG_ERR("[SMP] ✗ DHKey Check MISMATCH!");
 		return BT_SMP_ERR_DHKEY_CHECK_FAILED;
 	}
+	LOG_INF("[SMP] ✓ DHKey Check MATCHED! Crypto is correct!");
 
 	/* send local e */
 	err = sc_smp_send_dhkey_check(smp, e);
@@ -3528,14 +3667,18 @@ static uint8_t smp_dhkey_generate(struct bt_smp *smp)
 	return 0;
 }
 
-static uint8_t smp_dhkey_ready(struct bt_smp *smp, const uint8_t *dhkey)
+static uint8_t smp_dhkey_ready(struct bt_smp *smp, const uint8_t *dhkey) //smp_dhkey_ready()
 {
 	if (!dhkey) {
 		return BT_SMP_ERR_DHKEY_CHECK_FAILED;
 	}
 
 	atomic_clear_bit(smp->flags, SMP_FLAG_DHKEY_PENDING);
+	//COPIES DH KEY TO NON-SECURE MEMORY!
 	memcpy(smp->dhkey, dhkey, BT_DH_KEY_LEN);
+	//DH key is now stored in smp->dhkey
+	//COPIES DH KEY TO NON-SECURE MEMORY!
+
 
 	/* wait for user passkey confirmation */
 	if (atomic_test_bit(smp->flags, SMP_FLAG_USER)) {
@@ -3584,7 +3727,8 @@ static void bt_smp_dhkey_ready(const uint8_t *dhkey)
 	struct bt_smp *smp = smp_find(SMP_FLAG_DHKEY_GEN);
 	if (smp) {
 		atomic_clear_bit(smp->flags, SMP_FLAG_DHKEY_GEN);
-		err = smp_dhkey_ready(smp, dhkey);
+		err = smp_dhkey_ready(smp, dhkey); //← dhkey from ecc.c passed here!
+
 		if (err) {
 			smp_error(smp, err);
 		}

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(peripheral_sc_only)
@@ -15,6 +16,7 @@ target_sources(app PRIVATE
 #
 # SPDX-License-Identifier: Apache-2.0
 #
+
 
 cmake_minimum_required(VERSION 3.20.0)
 
@@ -36,7 +38,7 @@ project(tfm_secure_partition)
 
 target_sources(app PRIVATE
   src/main.c
-  src/dummy_partition.c
+  src/BLE_partition.c #dummy
 )
 
 target_include_directories(app PRIVATE
@@ -50,6 +52,8 @@ target_compile_definitions(app
 
 
 ############################ Partition Defs ####################################
+
+
 
 
 
