@@ -21,6 +21,10 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main);
 
+// Timer for measuring pairing overhead
+static int64_t pairing_start_time = 0;
+static int64_t pairing_end_time = 0;
+
 
 
 
@@ -64,7 +68,15 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	printk("Connected %s\n", addr);
 
-	if (bt_conn_set_security(conn, BT_SECURITY_L4)) {
+	// Start timing for pairing overhead measurement
+	pairing_start_time = k_uptime_get();
+	printk("[TIMER] Pairing started at: %lld ms\n", pairing_start_time);
+
+	// Security level selection:
+	// L2 = Just Works (unauthenticated, for timing tests)
+	// L4 = Passkey Display (authenticated, for demo)
+	// if (bt_conn_set_security(conn, BT_SECURITY_L2)) {  // <-- Use L2 for Just Works
+	if (bt_conn_set_security(conn, BT_SECURITY_L4)) {  // <-- Use L4 for Passkey mode
 		printk("Failed to set security\n");
 	}
 }
@@ -134,7 +146,15 @@ static void auth_cancel(struct bt_conn *conn)
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
+	// Stop timing and calculate pairing duration
+	pairing_end_time = k_uptime_get();
+	int64_t pairing_duration = pairing_end_time - pairing_start_time;
+
 	printk("Pairing Complete\n");
+	printk("========================================\n");
+	printk("[TIMER] Pairing ended at: %lld ms\n", pairing_end_time);
+	printk("[TIMER] TOTAL PAIRING TIME: %lld ms\n", pairing_duration);
+	printk("========================================\n");
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
@@ -144,7 +164,14 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 }
 
 static struct bt_conn_auth_cb auth_cb_display = {
-	.passkey_display = auth_passkey_display,
+	// ===== PAIRING MODE SELECTION =====
+	// Just Works mode (automatic pairing, for timing tests):
+	// .passkey_display = NULL,
+
+	// Passkey Display mode (shows passkey on device, for demo):
+	.passkey_display = auth_passkey_display,  // <-- Uncomment for passkey mode
+	// ==================================
+
 	.passkey_entry = NULL,
 	.cancel = auth_cancel,
 };
